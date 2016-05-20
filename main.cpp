@@ -95,7 +95,7 @@ private:
     sem_t *sm;
 };
 
-#else
+#elif defined _WIN32 || defined _WIN64
 #include <windows.h>
 
 class WinThread : public Thread {
@@ -119,7 +119,7 @@ private:
 
 class WinMutex : public Mutex {
 public:
-	WinMutex(const wchar_t *name) : name(name) {
+	WinMutex(const char *name) : name(name) {
 		mt = CreateMutex(NULL, false, name);
 	}
 
@@ -132,7 +132,7 @@ public:
 	}
 
 private:
-	const wchar_t *name;
+	const char *name;
 	HANDLE mt;
 };
 
@@ -192,7 +192,7 @@ void *printChar(void *arg);
 void *printCharMutexed(void *arg);
 void *printCharSemaphored(void *arg);
 
-#else
+#elif defined _WIN32 || defined _WIN64
 #define Thread WinThread
 
 DWORD WINAPI printChar(void *arg);
@@ -201,13 +201,13 @@ DWORD WINAPI printCharSemaphored(void *arg);
 
 #endif
 
-int main() {
+int main(int argc, char **argv) {
 #ifdef __GNUC__
     PosixMutex mutex;
     PosixSemaphore smK("smK", 0, 0);
     PosixSemaphore smM("smM", 0, 1);
-#else
-    WinMutex mutex(L"mt");
+#elif defined _WIN32 || defined _WIN64
+    WinMutex mutex("mt");
     WinSemaphore smK(0, 0);
     WinSemaphore smM(0, 1);
 #endif
@@ -258,7 +258,7 @@ int main() {
 
 #ifdef __GNUC__
 void *
-#else
+#elif defined _WIN32 || defined _WIN64
 DWORD WINAPI
 #endif
 printChar(void *arg) {
@@ -272,7 +272,7 @@ printChar(void *arg) {
 
 #ifdef __GNUC__
 void *
-#else
+#elif defined _WIN32 || defined _WIN64
 DWORD WINAPI
 #endif
 printCharMutexed(void *arg) {
@@ -285,13 +285,13 @@ printCharMutexed(void *arg) {
 
 #ifdef __GNUC__
 void *
-#else
+#elif defined _WIN32 || defined _WIN64
 DWORD WINAPI
 #endif
 printCharSemaphored(void *arg) {
     SemaphoredThreadContext *ctx = (SemaphoredThreadContext *) arg;
     for (int i = 0; i < 1000; i++) {
-        for (int j = 0; j < ctx->switches.size(); j++) {
+        for (unsigned int j = 0; j < ctx->switches.size(); j++) {
             if (ctx->ch == ctx->switches[j].ch) {
                 ctx->switches[j].semWait->wait();
                 std::cout << ctx->ch;
