@@ -4,6 +4,96 @@
 #include <iostream>
 #include <vector>
 
+class Thread {
+public:
+    virtual ~Thread() { }
+
+    virtual void join() = 0;
+
+    virtual void close() = 0;
+};
+
+class Mutex {
+public:
+    virtual ~Mutex() { }
+
+    virtual void lock() = 0;
+
+    virtual void unlock() = 0;
+};
+
+class Semaphore {
+public:
+    virtual ~Semaphore() { }
+
+    virtual void wait() = 0;
+
+    virtual void post() = 0;
+};
+
+class PosixThread : public Thread {
+public:
+    PosixThread(void *(procedure)(void *), void *ctx) {
+        pthread_create(&th, NULL, procedure, ctx);
+    }
+
+    void join() override {
+        pthread_join(th, &result);
+    }
+
+    void close() override {
+        // Not Implemented
+    }
+
+private:
+    void *result;
+    pthread_t th;
+};
+
+class PosixMutex : public Mutex {
+public:
+    PosixMutex() {
+        pthread_mutex_init(&mt, NULL);
+    }
+
+    ~PosixMutex() {
+        pthread_mutex_destroy(&mt);
+    }
+
+    void lock() override {
+        pthread_mutex_lock(&mt);
+    }
+
+    void unlock() override {
+        pthread_mutex_unlock(&mt);
+    }
+
+private:
+    pthread_mutex_t mt;
+};
+
+class PosixSemaphore : public Semaphore {
+public:
+    PosixSemaphore(const char *name, unsigned int initial, unsigned int max) {
+        sm = sem_open(name, initial, max);
+    }
+
+    ~PosixSemaphore() {
+        sem_close(sm);
+    }
+
+    void wait() override {
+        sem_wait(sm);
+    }
+
+    void post() override {
+        sem_post(sm);
+    }
+
+private:
+    sem_t *sm;
+};
+
 struct ThreadContext {
     ThreadContext(const char *ch) : ch(ch) { }
 
@@ -11,15 +101,15 @@ struct ThreadContext {
 };
 
 struct MutexedThreadContext : public ThreadContext {
-    MutexedThreadContext(const char *ch, pthread_mutex_t *mutex) : ThreadContext(ch), mutex(mutex) { }
+    MutexedThreadContext(const char *ch, Mutex *mutex) : ThreadContext(ch), mutex(mutex) { }
 
-    pthread_mutex_t *mutex;
+    Mutex *mutex;
 };
 
 struct SemaphoreSwitch {
     const char *ch;
-    sem_t *semWait;
-    sem_t *semPost;
+    Semaphore *semWait;
+    Semaphore *semPost;
 };
 
 struct SemaphoredThreadContext : public ThreadContext {
@@ -28,6 +118,60 @@ struct SemaphoredThreadContext : public ThreadContext {
 
     std::vector<SemaphoreSwitch> switches;
 };
+
+void *printChar(void *arg);
+
+void *printCharMutexed(void *arg);
+
+void *printCharSemaphored(void *arg);
+
+int main() {
+    PosixMutex mutex;
+    PosixSemaphore smK("smK", 0, 0);
+    PosixSemaphore smM("smM", 0, 1);
+    std::vector<SemaphoreSwitch> switches = {
+            {"k", &smK, &smM},
+            {"m", &smM, &smK}
+    };
+
+    PosixThread thA = PosixThread(printChar, new ThreadContext("a"));
+    thA.join();
+
+    PosixThread thB = PosixThread(printChar, new ThreadContext("b"));
+
+    PosixThread thF = PosixThread(printCharMutexed, new MutexedThreadContext("f", &mutex));
+    PosixThread thD = PosixThread(printCharMutexed, new MutexedThreadContext("d", &mutex));
+
+    PosixThread thC = PosixThread(printChar, new ThreadContext("c"));
+    thC.join();
+    PosixThread thE = PosixThread(printChar, new ThreadContext("e"));
+
+    thE.join();
+    thF.join();
+    thD.join();
+
+    PosixThread thK = PosixThread(printCharSemaphored, new SemaphoredThreadContext("k", switches));
+    PosixThread thM = PosixThread(printCharSemaphored, new SemaphoredThreadContext("m", switches));
+
+    PosixThread thG = PosixThread(printChar, new ThreadContext("g"));
+    thG.join();
+    PosixThread thH = PosixThread(printChar, new ThreadContext("h"));
+
+    thH.join();
+    thK.join();
+    thM.join();
+
+    PosixThread thN = PosixThread(printChar, new ThreadContext("n"));
+
+    thN.join();
+    thB.join();
+
+
+    PosixThread thP = PosixThread(printChar, new ThreadContext("p"));
+    thP.join();
+
+    return 0;
+}
 
 void *printChar(void *arg) {
     ThreadContext *ctx = (ThreadContext *) arg;
@@ -40,91 +184,24 @@ void *printChar(void *arg) {
 
 void *printCharMutexed(void *arg) {
     MutexedThreadContext *ctx = (MutexedThreadContext *) arg;
-    pthread_mutex_lock(ctx->mutex);
+    ctx->mutex->lock();
     printChar(ctx);
-    pthread_mutex_unlock(ctx->mutex);
+    ctx->mutex->unlock();
     return NULL;
 };
 
 void *printCharSemaphored(void *arg) {
     SemaphoredThreadContext *ctx = (SemaphoredThreadContext *) arg;
-
     for (int i = 0; i < 1000; i++) {
         for (int j = 0; j < ctx->switches.size(); j++) {
             if (ctx->ch == ctx->switches[j].ch) {
-                sem_wait(ctx->switches[j].semWait);
+                ctx->switches[j].semWait->wait();
                 std::cout << ctx->ch;
-                sem_post(ctx->switches[j].semPost);
+                ctx->switches[j].semPost->post();
                 break;
             }
         }
-
     };
     std::cout << std::endl;
     return NULL;
-}
-
-pthread_t startThread(void *(procedure)(void *), ThreadContext *ctx) {
-    pthread_t th;
-    pthread_create(&th, NULL, procedure, ctx);
-    return th;
-}
-
-int main() {
-    void *result;
-
-    pthread_mutex_t mutex;
-    pthread_mutex_init(&mutex, NULL);
-
-    sem_t *smK = sem_open("smK", 0, 0);
-    sem_t *smM = sem_open("smM", 0, 1);
-
-    std::vector<SemaphoreSwitch> switches = {
-            {"k", smK, smM},
-            {"m", smM, smK}
-    };
-
-    pthread_t thA = startThread(printChar, new ThreadContext("a"));
-    pthread_join(thA, &result);
-
-
-    pthread_t thB = startThread(printChar, new ThreadContext("b"));
-
-    pthread_t thF = startThread(printCharMutexed, new MutexedThreadContext("f", &mutex));
-    pthread_t thD = startThread(printCharMutexed, new MutexedThreadContext("d", &mutex));
-
-    pthread_t thC = startThread(printChar, new ThreadContext("c"));
-    pthread_join(thC, &result);
-    pthread_t thE = startThread(printChar, new ThreadContext("e"));
-
-    pthread_join(thE, &result);
-    pthread_join(thF, &result);
-    pthread_join(thD, &result);
-
-    pthread_t thK = startThread(printCharSemaphored, new SemaphoredThreadContext("k", switches));
-    pthread_t thM = startThread(printCharSemaphored, new SemaphoredThreadContext("m", switches));
-
-    pthread_t thG = startThread(printChar, new ThreadContext("g"));
-    pthread_join(thG, &result);
-    pthread_t thH = startThread(printChar, new ThreadContext("h"));
-
-    pthread_join(thH, &result);
-    pthread_join(thK, &result);
-    pthread_join(thM, &result);
-
-    pthread_t thN = startThread(printChar, new ThreadContext("n"));
-
-    pthread_join(thN, &result);
-    pthread_join(thB, &result);
-
-
-    pthread_t thP = startThread(printChar, new ThreadContext("p"));
-    pthread_join(thP, &result);
-
-
-    pthread_mutex_destroy(&mutex);
-    sem_close(smK);
-    sem_close(smM);
-
-    return 0;
 }
