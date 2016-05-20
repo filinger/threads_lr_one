@@ -29,7 +29,7 @@ public:
 };
 
 #ifdef __GNUC__
-#include "pthread.h"
+
 #include "semaphore.h"
 
 class PosixThread : public Thread {
@@ -138,8 +138,8 @@ private:
 
 class WinSemaphore : public Semaphore {
 public:
-	WinSemaphore(const wchar_t* name, unsigned int initial, unsigned int max) {
-		sm = CreateSemaphore(NULL, initial, max, name);
+	WinSemaphore(unsigned int initial, unsigned int max) {
+		sm = CreateSemaphore(NULL, initial, max, NULL);
 	}
 
 	~WinSemaphore() {
@@ -186,20 +186,14 @@ struct SemaphoredThreadContext : public ThreadContext {
 };
 
 #ifdef __GNUC__
-
 #define Thread PosixThread
-#define Mutex PosixMutex
-#define Semaphore PosixSemaphore
 
 void *printChar(void *arg);
 void *printCharMutexed(void *arg);
 void *printCharSemaphored(void *arg);
 
 #else
-
 #define Thread WinThread
-#define Mutex WinMutex
-#define Semaphore WinSemaphore
 
 DWORD WINAPI printChar(void *arg);
 DWORD WINAPI printCharMutexed(void *arg);
@@ -208,9 +202,16 @@ DWORD WINAPI printCharSemaphored(void *arg);
 #endif
 
 int main() {
-    Mutex mutex;
-    Semaphore smK("smK", 0, 0);
-    Semaphore smM("smM", 0, 1);
+#ifdef __GNUC__
+    PosixMutex mutex;
+    PosixSemaphore smK("smK", 0, 0);
+    PosixSemaphore smM("smM", 0, 1);
+#else
+    WinMutex mutex(L"mt");
+    WinSemaphore smK(0, 0);
+    WinSemaphore smM(0, 1);
+#endif
+
     std::vector<SemaphoreSwitch> switches = {
             {"k", &smK, &smM},
             {"m", &smM, &smK}
