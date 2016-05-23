@@ -18,7 +18,7 @@ void *printCharacter(void *arg) {
     return NULL;
 }
 
-int main() {
+int main_example() {
     void *result;
 
     pthread_mutex_init(&mt, NULL);

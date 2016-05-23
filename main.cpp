@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <unistd.h>
 
 class Thread {
 public:
@@ -100,74 +101,75 @@ private:
 
 class WinThread : public Thread {
 public:
-	WinThread(LPTHREAD_START_ROUTINE routine, void *ctx) {
-		hThread = CreateThread(NULL, 0, routine, ctx, 0, &IDThread);
-	}
+    WinThread(LPTHREAD_START_ROUTINE routine, void *ctx) {
+        hThread = CreateThread(NULL, 0, routine, ctx, 0, &IDThread);
+    }
 
-	void join() override {
-		WaitForSingleObject(hThread, INFINITE);
-	}
+    void join() override {
+        WaitForSingleObject(hThread, INFINITE);
+    }
 
-	void close() override {
-		CloseHandle(hThread);
-	}
+    void close() override {
+        CloseHandle(hThread);
+    }
 
 private:
-	HANDLE hThread;
-	DWORD IDThread;
+    HANDLE hThread;
+    DWORD IDThread;
 };
 
 class WinMutex : public Mutex {
 public:
-	WinMutex(const char *name) : name(name) {
-		mt = CreateMutex(NULL, false, name);
-	}
+    WinMutex(const char *name) : name(name) {
+        mt = CreateMutex(NULL, false, name);
+    }
 
-	void lock() override {
-		mt = OpenMutex(NULL, false, name);
-	}
+    void lock() override {
+        mt = OpenMutex(NULL, false, name);
+    }
 
-	void unlock() override {
-		ReleaseMutex(mt);
-	}
+    void unlock() override {
+        ReleaseMutex(mt);
+    }
 
 private:
-	const char *name;
-	HANDLE mt;
+    const char *name;
+    HANDLE mt;
 };
 
 class WinSemaphore : public Semaphore {
 public:
-	WinSemaphore(unsigned int initial, unsigned int max) {
-		sm = CreateSemaphore(NULL, initial, max, NULL);
-	}
+    WinSemaphore(unsigned int initial, unsigned int max) {
+        sm = CreateSemaphore(NULL, initial, max, NULL);
+    }
 
-	~WinSemaphore() {
-		CloseHandle(sm);
-	}
+    ~WinSemaphore() {
+        CloseHandle(sm);
+    }
 
-	void wait()	override {
-		WaitForSingleObject(sm, 0L);
-	}
+    void wait()	override {
+        WaitForSingleObject(sm, 0L);
+    }
 
-	void post() override {
-		ReleaseSemaphore(sm, 1, NULL);
-	}
+    void post() override {
+        ReleaseSemaphore(sm, 1, NULL);
+    }
 
 private:
-	HANDLE sm;
+    HANDLE sm;
 };
 
 #endif
 
 struct ThreadContext {
-    ThreadContext(const char *ch) : ch(ch) { }
+    ThreadContext(const char *ch, const int length) : ch(ch), length(length) { }
 
     const char *ch;
+    const int length;
 };
 
 struct MutexedThreadContext : public ThreadContext {
-    MutexedThreadContext(const char *ch, Mutex *mutex) : ThreadContext(ch), mutex(mutex) { }
+    MutexedThreadContext(const char *ch, const int length, Mutex *mutex) : ThreadContext(ch, length), mutex(mutex) { }
 
     Mutex *mutex;
 };
@@ -179,8 +181,8 @@ struct SemaphoreSwitch {
 };
 
 struct SemaphoredThreadContext : public ThreadContext {
-    SemaphoredThreadContext(const char *ch, const std::vector<SemaphoreSwitch> &switches)
-            : ThreadContext(ch), switches(switches) { }
+    SemaphoredThreadContext(const char *ch, const int length, const std::vector<SemaphoreSwitch> &switches)
+            : ThreadContext(ch, length), switches(switches) { }
 
     std::vector<SemaphoreSwitch> switches;
 };
@@ -189,7 +191,9 @@ struct SemaphoredThreadContext : public ThreadContext {
 #define Thread PosixThread
 
 void *printChar(void *arg);
+
 void *printCharMutexed(void *arg);
+
 void *printCharSemaphored(void *arg);
 
 #elif defined _WIN32 || defined _WIN64
@@ -204,8 +208,8 @@ DWORD WINAPI printCharSemaphored(void *arg);
 int main(int argc, char **argv) {
 #ifdef __GNUC__
     PosixMutex mutex;
-    PosixSemaphore smK("smK", 0, 0);
-    PosixSemaphore smM("smM", 0, 1);
+    PosixSemaphore smG("smG", 0, 0);
+    PosixSemaphore smH("smH", 0, 1);
 #elif defined _WIN32 || defined _WIN64
     WinMutex mutex("mt");
     WinSemaphore smK(0, 0);
@@ -213,64 +217,66 @@ int main(int argc, char **argv) {
 #endif
 
     std::vector<SemaphoreSwitch> switches = {
-            {"k", &smK, &smM},
-            {"m", &smM, &smK}
+            {"g", &smG, &smH},
+            {"h", &smH, &smG}
     };
 
-    Thread thA = Thread(printChar, new ThreadContext("a"));
+    Thread thA = Thread(printChar, new ThreadContext("a", 5));
     thA.join();
 
-    Thread thB = Thread(printChar, new ThreadContext("b"));
+    Thread thB = Thread(printChar, new ThreadContext("b", 25));
+    Thread thF = Thread(printChar, new ThreadContext("f", 10));
+    Thread thD = Thread(printChar, new ThreadContext("d", 10));
 
-    Thread thF = Thread(printCharMutexed, new MutexedThreadContext("f", &mutex));
-    Thread thD = Thread(printCharMutexed, new MutexedThreadContext("d", &mutex));
-
-    Thread thC = Thread(printChar, new ThreadContext("c"));
+    Thread thC = Thread(printCharMutexed, new MutexedThreadContext("c", 5, &mutex));
     thC.join();
-    Thread thE = Thread(printChar, new ThreadContext("e"));
+    Thread thE = Thread(printCharMutexed, new MutexedThreadContext("e", 5, &mutex));
 
     thE.join();
     thF.join();
     thD.join();
 
-    Thread thK = Thread(printCharSemaphored, new SemaphoredThreadContext("k", switches));
-    Thread thM = Thread(printCharSemaphored, new SemaphoredThreadContext("m", switches));
 
-    Thread thG = Thread(printChar, new ThreadContext("g"));
+    Thread thK = Thread(printChar, new ThreadContext("k", 10));
+    Thread thM = Thread(printChar, new ThreadContext("m", 10));
+    Thread thG = Thread(printCharSemaphored, new SemaphoredThreadContext("g", 5, switches));
     thG.join();
-    Thread thH = Thread(printChar, new ThreadContext("h"));
+    Thread thH = Thread(printCharSemaphored, new SemaphoredThreadContext("h", 5, switches));
 
-    thH.join();
     thK.join();
     thM.join();
+    thH.join();
 
-    Thread thN = Thread(printChar, new ThreadContext("n"));
+    Thread thN = Thread(printChar, new ThreadContext("n", 5));
 
     thN.join();
     thB.join();
 
-
-    Thread thP = Thread(printChar, new ThreadContext("p"));
+    Thread thP = Thread(printChar, new ThreadContext("p", 5));
     thP.join();
 
     return 0;
 }
 
 #ifdef __GNUC__
+
 void *
 #elif defined _WIN32 || defined _WIN64
 DWORD WINAPI
 #endif
 printChar(void *arg) {
     ThreadContext *ctx = (ThreadContext *) arg;
-    for (int i = 0; i < 1000; i++) {
+    for (int i = 0; i < ctx->length; i++) {
         std::cout << ctx->ch;
+        std::cout.flush();
+        usleep(100000);
     };
     std::cout << std::endl;
     return NULL;
 }
 
 #ifdef __GNUC__
+
 void *
 #elif defined _WIN32 || defined _WIN64
 DWORD WINAPI
@@ -284,17 +290,20 @@ printCharMutexed(void *arg) {
 };
 
 #ifdef __GNUC__
+
 void *
 #elif defined _WIN32 || defined _WIN64
 DWORD WINAPI
 #endif
 printCharSemaphored(void *arg) {
     SemaphoredThreadContext *ctx = (SemaphoredThreadContext *) arg;
-    for (int i = 0; i < 1000; i++) {
+    for (int i = 0; i < ctx->length; i++) {
         for (unsigned int j = 0; j < ctx->switches.size(); j++) {
             if (ctx->ch == ctx->switches[j].ch) {
                 ctx->switches[j].semWait->wait();
                 std::cout << ctx->ch;
+                std::cout.flush();
+                usleep(100000);
                 ctx->switches[j].semPost->post();
                 break;
             }
